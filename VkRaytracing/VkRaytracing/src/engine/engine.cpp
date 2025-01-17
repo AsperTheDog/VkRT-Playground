@@ -4,8 +4,14 @@
 
 #include "vertex.hpp"
 #include "vulkan_context.hpp"
-#include "ext/vulkan_extension_management.hpp"
+#include "ext/vulkan_deferred_host_operation.hpp"
 #include "utils/logger.hpp"
+
+#include "ext/vulkan_extension_management.hpp"
+#include "ext/vulkan_raytracing.hpp"
+#include "ext/vulkan_shader_clock.hpp"
+#include "ext/vulkan_swapchain.hpp"
+#include "ext/vulkan_acceleration_structure.hpp"
 
 static VulkanGPU chooseCorrectGPU()
 {
@@ -80,47 +86,23 @@ Engine::Engine(const std::string& p_WindowName, const SDLWindow::WindowSize p_Wi
     
     // Logical Device
     {
-        auto extensions = std::vector<const char*>{
-            VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-            VK_KHR_SHADER_CLOCK_EXTENSION_NAME,
-            VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
-		    VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
-		    VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME
-        };
-
-        VulkanExtensionChain chain{};
-        chain
-        .addExtension(VkPhysicalDeviceShaderClockFeaturesKHR{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_CLOCK_FEATURES_KHR,
-            .pNext = nullptr
-        })
-        .addExtension(VkPhysicalDeviceBufferDeviceAddressFeatures{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES,
-            .bufferDeviceAddress = true
-        })
-        .addExtension(VkPhysicalDeviceDescriptorIndexingFeatures{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES,
-            .shaderSampledImageArrayNonUniformIndexing = true,
-            .runtimeDescriptorArray = true
-        })
-        .addExtension(VkPhysicalDeviceAccelerationStructureFeaturesKHR{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR,
-            .accelerationStructure = true
-        })
-        .addExtension(VkPhysicalDeviceRayTracingPipelineFeaturesKHR{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR,
-            .rayTracingPipeline = true
-        });
-        
+        VulkanDeviceExtensionManager manager{};
+        manager.addExtension(VK_KHR_SWAPCHAIN_EXTENSION_NAME, new VulkanSwapchainExtension(m_DeviceID));
+        manager.addExtension(VK_KHR_SHADER_CLOCK_EXTENSION_NAME, new VulkanShaderClockExtension(m_DeviceID, false, false));
+        manager.addExtension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, new VulkanDeferredHostOperationsExtension(m_DeviceID));
+        manager.addExtension(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME, new VulkanAccelerationStructureExtension(m_DeviceID, true, false, false, false, false));
+        manager.addExtension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, new VulkanRayTracingPipelineExtension(m_DeviceID, true, false, false, false ,false));
 
         VkPhysicalDeviceFeatures features = {};
         features.fillModeNonSolid = true;
         features.samplerAnisotropy = true;
         features.shaderInt64 = true;
 
-        m_DeviceID = VulkanContext::createDevice(gpu, selector, extensions, {}, chain.getChain());
+        m_DeviceID = VulkanContext::createDevice(gpu, selector, &manager, {});
         Logger::print("Logical Device Created", Logger::INFO);
         Logger::pushContext("Logical Device");
+        std::vector<const char*> extensions{};
+        manager.populateExtensionNames(extensions);
         Logger::print("Extensions: " + std::to_string(extensions.size()), Logger::INFO);
         for (const auto& ext : extensions)
             Logger::print(std::string("- ") + ext, Logger::INFO);
@@ -129,8 +111,9 @@ Engine::Engine(const std::string& p_WindowName, const SDLWindow::WindowSize p_Wi
     VulkanDevice& device = VulkanContext::getDevice(m_DeviceID);
 
     // Swapchain
-    m_SwapchainID = device.createSwapchain(m_Window.getSurface(), m_Window.getSize().toExtent2D(), { VK_FORMAT_R8G8B8A8_SRGB, VK_COLORSPACE_SRGB_NONLINEAR_KHR });
-    const VulkanSwapchain& swapchain = device.getSwapchain(m_SwapchainID);
+    VulkanSwapchainExtension* swapchainExtension = VulkanSwapchainExtension::get(device);
+    m_SwapchainID = swapchainExtension->createSwapchain(m_Window.getSurface(), m_Window.getSize().toExtent2D(), { VK_FORMAT_R8G8B8A8_SRGB, VK_COLORSPACE_SRGB_NONLINEAR_KHR });
+    const VulkanSwapchain& swapchain = swapchainExtension->getSwapchain(m_SwapchainID);
     Logger::print("Swapchain Created", Logger::INFO);
     Logger::pushContext("Swapchain");
     Logger::print("Image Count: " + std::to_string(swapchain.getImageCount()), Logger::INFO);
